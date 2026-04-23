@@ -397,6 +397,7 @@ class DynInst : public ExecContext, public RefCounted
     bool valueMispred = false;
     bool verified = false;
     bool corrected = false;
+    bool critical= false;
     Tick pred_tick = 0;
 
     // setter for LVP info -Pete

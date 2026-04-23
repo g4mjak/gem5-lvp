@@ -40,5 +40,6 @@
             "label": "[gem5] All open Issues",
             "query": "state:open repo:${owner}/${repository} sort:updated-desc"
         }
-    ]
+    ],
+    "C_Cpp.errorSquiggles": "enabled"
 }

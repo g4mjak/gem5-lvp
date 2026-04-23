@@ -60,8 +60,13 @@ class LVPStride : public ValuePredictor
     VPResult lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num) override;
     void update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_address,
                           RegVal correct_val, RegVal predicted_val,
-                          LVPType classification, Cycles rn_to_ex_delay) override;
+                          LVPType classification, Cycles rn_to_ex_delay,
+                          bool critical) override;
     void squash(const InstSeqNum seq_num) override;
+
+    void addpenalty (Cycles delta,Addr load_addr) override;
+
+    void dump_and_reset(const std::string& filename);
 
   private:
 
@@ -133,6 +138,23 @@ class LVPStride : public ValuePredictor
 
     const bool useStride;
 
+    struct load_info
+    {
+        int exec = 0;
+        int pred = 0;
+        int correct = 0;
+        int incorrect = 0;
+        int penalty = 0;
+        int savings = 0;
+        int critical = 0;
+        int crit_savings = 0;
+    };
+
+    bool firstDump;
+
+    std::unordered_map<Addr,load_info> loadStats;
+
+
     struct LVPStrideStats : public statistics::Group
     {
         LVPStrideStats(statistics::Group *parent);
@@ -144,6 +166,12 @@ class LVPStride : public ValuePredictor
 
         statistics::Distribution valuePredSavedCyclesLog2;
         statistics::Distribution valuePredSavedCycles;
+
+        statistics::Distribution penaltyCyclesLog2;
+        statistics::Distribution penaltyCycles;
+
+        statistics::Scalar totalPenaltyCycles;
+        statistics::Scalar totalSavedCycles;
     } lvpstats;
 };
 

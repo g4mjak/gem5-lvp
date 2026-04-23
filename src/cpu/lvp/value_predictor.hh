@@ -80,10 +80,13 @@ class ValuePredictor : public SimObject
      */
     virtual void update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_address,
                           RegVal correct_val, RegVal predicted_val,
-                          LVPType classification, Cycles rn_to_ex_delay) = 0;
+                          LVPType classification, Cycles rn_to_ex_delay,
+                          bool critical) = 0;
 
     // If predict error, squash the inflight instructions in value predictor.
     virtual void squash(const InstSeqNum seq_num) {};
+
+    virtual void addpenalty (Cycles delta, Addr load_addr) {};
 
   protected:
     /** Number of the threads for which the branch history is maintained. */

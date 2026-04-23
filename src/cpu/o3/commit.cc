@@ -51,26 +51,26 @@
 #include "cpu/base.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/exetrace.hh"
+#include "cpu/lvp/load_value_prediction_unit.hh"
 #include "cpu/o3/cpu.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/limits.hh"
 #include "cpu/o3/thread_state.hh"
 #include "cpu/timebuf.hh"
-#include "cpu/lvp/load_value_prediction_unit.hh"
 #include "debug/Activity.hh"
+#include "debug/CVU.hh"
 #include "debug/Commit.hh"
 #include "debug/CommitRate.hh"
 #include "debug/Drain.hh"
 #include "debug/ExecFaulting.hh"
 #include "debug/HtmCpu.hh"
+#include "debug/LVP.hh"
 #include "debug/O3PipeView.hh"
+#include "debug/SP.hh"
 #include "inst_queue.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/faults.hh"
 #include "sim/full_system.hh"
-#include "debug/CVU.hh"
-#include "debug/LVP.hh"
-
 
 namespace gem5
 {
@@ -1367,6 +1367,20 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
     // Update Value predictor
     updateValuePredictor(tid, head_inst);
 
+    if (last_val_misp_tick > 0 && !head_inst->valueMispred){
+        Tick delta = curTick()-last_val_misp_tick;
+            Cycles clk = cpu->ticksToCycles(delta);
+            last_val_misp_tick=0;
+        valuePred->addpenalty(clk,last_val_misp_load);
+        last_val_misp_load=0;
+    }
+    if (head_inst->valueMispred){
+            last_val_misp_tick = curTick();
+        last_val_misp_load = head_inst->pcState().instAddr();
+        DPRINTF(SP,"Misprediction registered from Load: %llu at %llu\n",
+            last_val_misp_load, last_val_misp_tick);
+    }
+
     // Finally clear the head ROB entry.
     rob->retireHead(tid);
 
@@ -1423,7 +1437,8 @@ Commit::updateValuePredictor(ThreadID tid, const DynInstPtr &inst)
                           inst->seqNum, inst->effAddr,
                           reg_result, inst->getLVPValue(),
                           inst->getLVPClassification(),
-                          clk
+                          clk,
+                          inst->critical
                         );
         // debug statement to see if we are speculating
         DPRINTF(Commit, "Inst [%llu] Speculating: %d, LVP Classification: %d\n", inst->seqNum, inst->isValSpeculation, inst->getLVPClassification());
@@ -1443,7 +1458,7 @@ Commit::updateValuePredictor(ThreadID tid, const DynInstPtr &inst)
             assert(inst->corrected);
         }
     }
-
+    inst->critical=false;
     // if (inst->isValSpeculation && !validResult) {
     //     DPRINTF(Commit, "Mispredicted load value for instr [%llu], squashing\n", inst->seqNum);
     //     inst->valueMispred = true;

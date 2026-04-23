@@ -2,7 +2,7 @@ from m5.objects.IndexingPolicies import *
 from m5.objects.ReplacementPolicies import *
 from m5.objects.Tags import *
 from m5.params import *
-from m5.SimObject import SimObject
+from m5.SimObject import *
 
 
 class LoadClassificationTable(SimObject):
@@ -70,7 +70,9 @@ class LVPStride(ValuePredictor):
     type = "LVPStride"
     cxx_class = "gem5::LVPStride"
     cxx_header = "cpu/lvp/lvp_stride.hh"
-
+    cxx_exports = [
+        PyBindMethod("dump_and_reset"),
+    ]
     tagBits = Param.Unsigned(16, "Tag bits of the load value predictor table")
 
     # table_entries = Param.Unsigned(8192, "Number of entries in the load value predictor table")

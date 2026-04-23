@@ -53,6 +53,7 @@
 #include "cpu/o3/limits.hh"
 #include "debug/Fetch.hh"
 #include "debug/ROB.hh"
+#include "debug/SP.hh"
 #include "enums/SMTQueuePolicy.hh"
 #include "params/BaseO3CPU.hh"
 
@@ -274,7 +275,11 @@ ROB::isHeadReady(ThreadID tid)
 {
     stats.reads++;
     if (threadEntries[tid] != 0) {
-        return instList[tid].front()->readyToCommit();
+        bool ready = instList[tid].front()->readyToCommit();
+        if (!ready){
+            instList[tid].front()->critical= true;
+        }
+        return ready;
     }
 
     return false;
@@ -376,7 +381,7 @@ ROB::doSquash(ThreadID tid, bool squashedDueToMemOrder)
                 (*squashIt[tid])->squashedDueToMemOrder = true;
             }
         }
-        
+
         if ((*squashIt[tid])->isStore()) {
             stats.squashedStores++;
             if ((*squashIt[tid])->isRMW()) {
@@ -563,7 +568,7 @@ ROB::ROBStats::ROBStats(statistics::Group *parent)
         "The number of read-modify-write store instructions squashed"),
     ADD_STAT(squashedRMWAStores, statistics::units::Count::get(),
         "The number of atomic read-modify-write store instructions squashed")
-    
+
 {
 }
 

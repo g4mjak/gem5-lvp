@@ -38,8 +38,10 @@
 #include "cpu/lvp/lvp_stride.hh"
 
 #include "base/intmath.hh"
+#include "base/output.hh"
 #include "base/trace.hh"
 #include "debug/LVP.hh"
+#include "debug/SP.hh"
 
 namespace gem5
 {
@@ -52,6 +54,7 @@ LVPStride::LVPStride(const LVPStrideParams &p)
       confThreshold(p.confidence_threshold),
       confResetToZero(p.confidence_reset_to_zero),
       useStride(p.use_stride),
+      firstDump(true),
       lvpstats(this)
 {
     DPRINTF(LVP, "Creating Stride Value predictor\n");
@@ -111,23 +114,56 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
 void
 LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_address,
                   RegVal correct_val, RegVal predicted_val,
-                  LVPType classification, Cycles rn_to_ex_delay)
+                  LVPType classification, Cycles rn_to_ex_delay, bool critical)
 {
 
     stats.totalLoads++;
+    auto& ls = loadStats[inst_addr];
+    ls.exec++;
+    if (critical) {
+        DPRINTF(SP,"Critical Load: %llu \n",inst_addr);
+        ls.critical++;
+    }
+
+    LVPEntry::KeyType key = index(tid, inst_addr);
+    LVPEntry * entry = lvpTable.findEntry(key);
     if (classification == LVP_PREDICTABLE) {
+        ls.pred++;
         if (predicted_val != correct_val) {
+            ls.incorrect++;
             stats.incorrect++;
+            DPRINTF(SP,"Misprediction: pval %llu, cval %llu,
+                iaddr %llu, stride %llu\n",
+                predicted_val,correct_val, inst_addr, entry->stride);
         } else {
+            ls.correct++;
             stats.correct++;
+            uint64_t d = rn_to_ex_delay;
+            lvpstats.valuePredSavedCyclesLog2.sample(d > 0 ? floorLog2(d) : 0);
+            lvpstats.valuePredSavedCycles.sample(d);
+            lvpstats.totalSavedCycles+=d;
+            ls.savings+=d;
+            if (critical) {
+                ls.crit_savings+=d;
+            }
+
+            if (entry->stride == 0) {
+                lvpstats.constantCorrect++;
+                if (entry->value == 0) {
+                    lvpstats.numZeroConstLoads++;
+                } else if (entry->value == 1) {
+                    lvpstats.numOneConstLoads++;
+                }
+            } else {
+                lvpstats.strideCorrect++;
+            }
         }
     }
     DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%llu, pval=%#x, cval=%#x, class=%i) pred=%i, correct=%i, delay=%i\n",
             __func__, inst_addr, seq_num, predicted_val, correct_val, classification, rn_to_ex_delay,
             classification == LVP_PREDICTABLE, predicted_val == correct_val);
 
-    LVPEntry::KeyType key = index(tid, inst_addr);
-    LVPEntry * entry = lvpTable.findEntry(key);
+
 
     if (entry == nullptr) {
         entry = lvpTable.findVictim(key);
@@ -158,28 +194,14 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         if (entry->confidence > 0) {
             entry->confidence = confResetToZero ? 0 : entry->confidence - 1;
         }
-
         if (entry->confidence == 0) {
             entry->stride = stride;
         }
     } else {
-        uint64_t d = rn_to_ex_delay;
-        lvpstats.valuePredSavedCyclesLog2.sample(d > 0 ? floorLog2(d) : 0);
-        lvpstats.valuePredSavedCycles.sample(rn_to_ex_delay);
-
         if (entry->confidence < confThreshold) {
             entry->confidence++;
         }
-        if (entry->stride == 0) {
-            lvpstats.constantCorrect++;
-            if (entry->value == 0) {
-                lvpstats.numZeroConstLoads++;
-            } else if (entry->value == 1) {
-                lvpstats.numOneConstLoads++;
-            }
-        } else {
-            lvpstats.strideCorrect++;
-        }
+
     }
 
     DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li, stride=%li, IFsize=%i\n",
@@ -204,6 +226,60 @@ LVPStride::numInflights(Addr iaddr)
             n++;
     }
     return n;
+}
+
+void
+LVPStride::addpenalty(Cycles delta, Addr load_addr)
+{
+    uint64_t d=delta;
+    lvpstats.totalPenaltyCycles+=d;
+    lvpstats.penaltyCycles.sample(d);
+    lvpstats.penaltyCyclesLog2.sample(d > 0 ? floorLog2(d) : 0);
+
+    auto& ls = loadStats[load_addr];
+    ls.penalty+=d;
+
+    DPRINTF(SP,"Penalty: %" PRIu64" from Load %llu\n", d, load_addr);
+}
+
+void
+LVPStride::dump_and_reset(const std::string& filename)
+{
+    std::ios::openmode mode = firstDump
+        ? std::ios::out
+        : (std::ios::out | std::ios::app);
+
+    std::ofstream fileStream(simout.resolve(filename), mode);
+
+    if (!fileStream.good())
+        panic("Could not open %s for writing\n", filename);
+
+    if (firstDump) {
+        ccprintf(fileStream,
+                "pc,exec,pred,correct,incorrect,"
+                "penalty,savings,critical,crit_savings\n");
+    }else{
+        ccprintf(fileStream,"-1,0,0,0,0,0,0,0,0\n");
+    }
+
+    // Dump stats
+    for (auto& li : loadStats) {
+        ccprintf(fileStream,"%llu,%i,%i,%i,%i,%i,%i,%i,%i\n",
+                 li.first,
+                 li.second.exec,
+                 li.second.pred,
+                 li.second.correct,
+                 li.second.incorrect,
+                 li.second.penalty,
+                 li.second.savings,
+                 li.second.critical,
+                 li.second.crit_savings
+                );
+    }
+
+    fileStream.close();
+    loadStats.clear();
+    firstDump = false;
 }
 
 #else
@@ -298,10 +374,20 @@ LVPStride::LVPStrideStats::LVPStrideStats(statistics::Group *parent)
       ADD_STAT(valuePredSavedCyclesLog2, statistics::units::Count::get(),
                "Required for Top-Down, number of committed instructions"),
       ADD_STAT(valuePredSavedCycles, statistics::units::Count::get(),
-               "Required for Top-Down, number of committed instructions")
+               "Required for Top-Down, number of committed instructions"),
+      ADD_STAT(penaltyCyclesLog2, statistics::units::Count::get(),
+               "Required for Top-Down, penalty"),
+      ADD_STAT(penaltyCycles, statistics::units::Count::get(),
+               "Required for Top-Down, penalty"),
+      ADD_STAT(totalPenaltyCycles, statistics::units::Count::get(),
+               "Required for Top-Down, total penalty"),
+      ADD_STAT(totalSavedCycles, statistics::units::Count::get(),
+               "Required for Top-Down, total savings")
 {
     valuePredSavedCyclesLog2.init(0, 15, 1).flags(statistics::pdf);
-    valuePredSavedCycles.init(0, 100, 10).flags(statistics::pdf);
+    valuePredSavedCycles.init(0, 40, 2).flags(statistics::pdf);
+    penaltyCyclesLog2.init(0, 15, 1).flags(statistics::pdf);
+    penaltyCycles.init(0, 40, 2).flags(statistics::pdf);
 }
 
 } // namespace gem5::branch_prediction

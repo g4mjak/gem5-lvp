@@ -149,6 +149,8 @@ class Commit
     LoadValuePredictionUnit *loadValuePred;
     ValuePredictor *valuePred;
     bool predictValues;
+    Tick last_val_misp_tick;
+    Addr last_val_misp_load;
 
     /** Mark the thread as processing a trap. */
     void processTrapEvent(ThreadID tid);
