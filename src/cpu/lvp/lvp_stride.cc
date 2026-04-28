@@ -120,6 +120,12 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
     stats.totalLoads++;
     auto& ls = loadStats[inst_addr];
     ls.exec++;
+    auto& la = ls.accesses[curTick()];
+    la.predicted = predicted_val;
+    la.correct = correct_val;
+    la.predict=-1;
+    la.delta=0;
+
     if (critical) {
         DPRINTF(SP,"Critical Load: %llu \n",inst_addr);
         ls.critical++;
@@ -129,12 +135,14 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
     LVPEntry * entry = lvpTable.findEntry(key);
     if (classification == LVP_PREDICTABLE) {
         ls.pred++;
+        la.predict=1;
         if (predicted_val != correct_val) {
             ls.incorrect++;
             stats.incorrect++;
-            DPRINTF(SP,"Misprediction: pval %llu, cval %llu,
-                iaddr %llu, stride %llu\n",
+            DPRINTF(SP,"Misprediction: pval %llu,
+                cval %llu,iaddr %llu, str %llu\n",
                 predicted_val,correct_val, inst_addr, entry->stride);
+            la.delta = -1;
         } else {
             ls.correct++;
             stats.correct++;
@@ -143,6 +151,7 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
             lvpstats.valuePredSavedCycles.sample(d);
             lvpstats.totalSavedCycles+=d;
             ls.savings+=d;
+            la.delta = d;
             if (critical) {
                 ls.crit_savings+=d;
             }
@@ -189,6 +198,7 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         inflightPred.pop_back();
     }
 
+    la.conf=entry->confidence;
 
     if (pred_value != correct_val) {
         if (entry->confidence > 0) {
@@ -249,22 +259,30 @@ LVPStride::dump_and_reset(const std::string& filename)
         ? std::ios::out
         : (std::ios::out | std::ios::app);
 
-    std::ofstream fileStream(simout.resolve(filename), mode);
+    std::ofstream fileStream_sum(
+        simout.resolve(filename+"_summary.csv"), mode);
+    std::ofstream fileStream_acc(
+        simout.resolve(filename+"_accesses.csv"), mode);
 
-    if (!fileStream.good())
-        panic("Could not open %s for writing\n", filename);
 
+    if (!fileStream_sum.good())
+        panic("Could not open %s for writing\n", filename+"_summary.csv");
+    if (!fileStream_acc.good())
+        panic("Could not open %s for writing\n", filename+"_accesses.csv");
     if (firstDump) {
-        ccprintf(fileStream,
+        ccprintf(fileStream_sum,
                 "pc,exec,pred,correct,incorrect,"
                 "penalty,savings,critical,crit_savings\n");
+        ccprintf(fileStream_acc,
+                "pc,tick,predict,predicted,correct,delta,confidence\n");
     }else{
-        ccprintf(fileStream,"-1,0,0,0,0,0,0,0,0\n");
+        ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0\n");
+        ccprintf(fileStream_acc,"-1,0,0,0,0,0\n");
     }
 
-    // Dump stats
+    // Dump stats for summary
     for (auto& li : loadStats) {
-        ccprintf(fileStream,"%llu,%i,%i,%i,%i,%i,%i,%i,%i\n",
+        ccprintf(fileStream_sum,"%llu,%i,%i,%i,%i,%i,%i,%i,%i\n",
                  li.first,
                  li.second.exec,
                  li.second.pred,
@@ -276,8 +294,26 @@ LVPStride::dump_and_reset(const std::string& filename)
                  li.second.crit_savings
                 );
     }
+    fileStream_sum.close();
 
-    fileStream.close();
+    //Dump stats for per access save
+    for (auto& li : loadStats) {
+        const auto& stat = li.second;
+
+            for (const auto& acc : stat.accesses) {
+            ccprintf(fileStream_acc,"%llu,%llu,%i,%llu,%llu,%i,%llu\n",
+                li.first,
+                acc.first,
+                acc.second.predict,
+                acc.second.predicted,
+                acc.second.correct,
+                acc.second.delta,
+                acc.second.conf
+            );
+        }
+    }
+    fileStream_acc.close();
+
     loadStats.clear();
     firstDump = false;
 }

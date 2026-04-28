@@ -138,6 +138,15 @@ class LVPStride : public ValuePredictor
 
     const bool useStride;
 
+    struct LoadAccess
+    {
+        int64_t delta;
+        uint64_t predicted;
+        uint64_t correct;
+        int64_t predict;
+        int64_t conf;
+    };
+
     struct load_info
     {
         int exec = 0;
@@ -148,6 +157,9 @@ class LVPStride : public ValuePredictor
         int savings = 0;
         int critical = 0;
         int crit_savings = 0;
+
+        std::map<uint64_t, LoadAccess> accesses;
+        //std::vector<uint64_t> accesses;
     };
 
     bool firstDump;
