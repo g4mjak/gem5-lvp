@@ -96,6 +96,8 @@ class LVPStride : public ValuePredictor
 
         /** Confidence of the prediction */
         int confidence;
+        /** Savings Value of the prediction */
+        int saving;
 
         /** Prediction */
         int64_t stride;
@@ -132,6 +134,8 @@ class LVPStride : public ValuePredictor
 
     /** The confidence threshold */
     const int confThreshold;
+
+    const int saveThreshold;
 
     /** Reset policy. Reset to zero or decrement */
     const bool confResetToZero;

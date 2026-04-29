@@ -52,6 +52,7 @@ LVPStride::LVPStride(const LVPStrideParams &p)
           p.table_replacement_policy, p.table_indexing_policy,
           LVPEntry(genTagExtractor(p.table_indexing_policy))),
       confThreshold(p.confidence_threshold),
+      saveThreshold(p.savings_threshold),
       confResetToZero(p.confidence_reset_to_zero),
       useStride(p.use_stride),
       firstDump(true),
@@ -80,32 +81,39 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
     LVPEntry::KeyType key = index(tid, inst_addr);
     LVPEntry * entry = lvpTable.findEntry(key);
     VPResult result;
+    result.value = 0;
     result.predict = false;
     result.taken = LVP_STRONG_UNPREDICTABLE;
 
     if (entry && entry->tid == tid) {
         // DPRINTF(BTB, "BTB::%s: hit PC: %#x, idx:%#x \n",
         //              __func__, instPC, idx);
-        if (entry->confidence >= confThreshold) {
-            result.predict = true;
             // Get the number of inflights
-            unsigned inflights = numInflights(inst_addr);
+        unsigned inflights = numInflights(inst_addr);
             // The value is this instance + in-flights * the stride
-            result.value = entry->value + ((inflights + 1) * entry->stride);
+        result.value = entry->value + ((inflights + 1) * entry->stride);
+        if (entry->confidence >= confThreshold) {
+            // && entry->saving >= saveThreshold
+
+            result.predict = true;
             // result.value = entry->value + (inflights * entry->stride);
             result.taken = LVP_PREDICTABLE;
 
             // Push the prediction instance to the in-flight queue
             inflightPred.push_front({inst_addr, seq_num});
 
-            DPRINTF(LVP, "VP for sn=%i, lastval=%llu, stride=%i, inflights=%i\n",
-                    seq_num, entry->value, entry->stride, inflights);
+            DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu,"
+                "stride=%i, inflights=%i, conf=%i\n",
+                    inst_addr, entry->value,
+                    entry->stride, inflights, entry->confidence);
         }
         lvpTable.accessEntry(entry);
     }
 
-    DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%i) res:[pred=%i, value=%llu, conf=%i] IFsize=%i\n",
-            __func__, inst_addr, seq_num, result.predict, result.value, result.taken, inflightPred.size());
+    DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%i)"
+        "res:[pred=%i, value=%llu, taken=%i] IFsize=%i\n",
+            __func__, inst_addr, seq_num,
+            result.predict, result.value, result.taken, inflightPred.size());
 
     return result;
 }
@@ -124,10 +132,11 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
     la.predicted = predicted_val;
     la.correct = correct_val;
     la.predict=-1;
+    //uint64_t d = rn_to_ex_delay;
     la.delta=0;
 
     if (critical) {
-        DPRINTF(SP,"Critical Load: %llu \n",inst_addr);
+        //DPRINTF(SP,"Critical Load: %llu \n",inst_addr);
         ls.critical++;
     }
 
@@ -139,8 +148,8 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         if (predicted_val != correct_val) {
             ls.incorrect++;
             stats.incorrect++;
-            DPRINTF(SP,"Misprediction: pval %llu,
-                cval %llu,iaddr %llu, str %llu\n",
+            DPRINTF(SP,"Misprediction: pval %llu,cval %llu,"
+                "iaddr %llu, str %llu\n",
                 predicted_val,correct_val, inst_addr, entry->stride);
             la.delta = -1;
         } else {
@@ -169,8 +178,10 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         }
     }
     DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%llu, pval=%#x, cval=%#x, class=%i) pred=%i, correct=%i, delay=%i\n",
-            __func__, inst_addr, seq_num, predicted_val, correct_val, classification, rn_to_ex_delay,
-            classification == LVP_PREDICTABLE, predicted_val == correct_val);
+            __func__, inst_addr, seq_num, predicted_val,
+            correct_val, classification,
+            classification == LVP_PREDICTABLE,
+            predicted_val == correct_val, rn_to_ex_delay);
 
 
 
@@ -179,6 +190,7 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         lvpTable.insertEntry(key, entry);
 
         entry->confidence = 0;
+        entry->saving = 0;
         entry->tid = tid;
         entry->stride = 0;
         entry->value = correct_val;
@@ -200,8 +212,9 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
 
     la.conf=entry->confidence;
 
-    if (pred_value != correct_val) {
+    if (last_value != correct_val) {
         if (entry->confidence > 0) {
+            DPRINTF(LVP, "Test\n");
             entry->confidence = confResetToZero ? 0 : entry->confidence - 1;
         }
         if (entry->confidence == 0) {
@@ -213,9 +226,12 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
         }
 
     }
+    entry->saving = rn_to_ex_delay;
 
-    DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li, stride=%li, IFsize=%i\n",
-            pred_value != correct_val, entry->confidence, entry->value, entry->stride, inflightPred.size());
+    DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li,"
+        "last_val %li, pred_val %li, stride=%li, IFsize=%i\n",
+            pred_value != correct_val, entry->confidence, entry->value,
+            last_value, pred_value, entry->stride, inflightPred.size());
 }
 
 void
