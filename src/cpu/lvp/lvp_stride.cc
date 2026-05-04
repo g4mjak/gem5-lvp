@@ -53,6 +53,7 @@ LVPStride::LVPStride(const LVPStrideParams &p)
           LVPEntry(genTagExtractor(p.table_indexing_policy))),
       confThreshold(p.confidence_threshold),
       saveThreshold(p.savings_threshold),
+      saveAlpha(0.1),
       confResetToZero(p.confidence_reset_to_zero),
       useStride(p.use_stride),
       firstDump(true),
@@ -75,7 +76,9 @@ LVPStride::LVPStride(const LVPStrideParams &p)
 VPResult
 LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
 {
+    //Stats
     stats.lookups++;
+    //-----
 
     // Addr idx = index(inst_addr);
     LVPEntry::KeyType key = index(tid, inst_addr);
@@ -100,21 +103,22 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
             result.taken = LVP_PREDICTABLE;
 
             // Push the prediction instance to the in-flight queue
-            inflightPred.push_front({inst_addr, seq_num});
 
-            DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu,"
+
+        }
+        DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu,"
                 "stride=%i, inflights=%i, conf=%i\n",
                     inst_addr, entry->value,
                     entry->stride, inflights, entry->confidence);
-        }
         lvpTable.accessEntry(entry);
     }
+
+    inflightPred.push_front({inst_addr, seq_num});
 
     DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%i)"
         "res:[pred=%i, value=%llu, taken=%i] IFsize=%i\n",
             __func__, inst_addr, seq_num,
             result.predict, result.value, result.taken, inflightPred.size());
-
     return result;
 }
 
@@ -125,46 +129,96 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
                   LVPType classification, Cycles rn_to_ex_delay, bool critical)
 {
 
-    stats.totalLoads++;
-    auto& ls = loadStats[inst_addr];
-    ls.exec++;
-    auto& la = ls.accesses[curTick()];
-    la.predicted = predicted_val;
-    la.correct = correct_val;
-    la.predict=-1;
-    //uint64_t d = rn_to_ex_delay;
-    la.delta=0;
-
-    if (critical) {
-        //DPRINTF(SP,"Critical Load: %llu \n",inst_addr);
-        ls.critical++;
-    }
-
     LVPEntry::KeyType key = index(tid, inst_addr);
     LVPEntry * entry = lvpTable.findEntry(key);
+
+    update_stats(tid,inst_addr,seq_num,load_address,
+        correct_val,predicted_val,classification,
+        rn_to_ex_delay,critical,entry);
+
+    DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%llu, pval=%#x, cval=%#x, class=%i) "
+        "pred=%i, correct=%i, delay=%i\n",
+            __func__, inst_addr, seq_num, predicted_val,
+            correct_val, classification,
+            classification == LVP_PREDICTABLE,
+            predicted_val == correct_val, rn_to_ex_delay);
+
+
+    //First Update
+    if (entry == nullptr) {
+        entry = lvpTable.findVictim(key);
+        lvpTable.insertEntry(key, entry);
+
+        entry->confidence = 0;
+        entry->saving = 0;
+        entry->tid = tid;
+        entry->stride = 0;
+        entry->value = correct_val;
+        DPRINTF(LVP, "Allocate new entry: %llu\n", entry->value);
+
+        assert(inflightPred.size());
+        assert(inflightPred.back().sn == seq_num);
+        inflightPred.pop_back();
+        return;
+    }
+
+    lvpTable.accessEntry(entry);
+    uint64_t last_value = entry->value;
+    uint64_t pred_value = entry->value + entry->stride;
+    int64_t stride = useStride ?
+        ((int64_t)correct_val - (int64_t)last_value) : 0;
+
+    // Update the latest value + stride
+    entry->value = correct_val;
+    DPRINTF(LVP, "Size: %i\n", inflightPred.size());
+    assert(inflightPred.size());
+    assert(inflightPred.back().sn == seq_num);
+    inflightPred.pop_back();
+
+
+    if (pred_value != correct_val) {
+        if (entry->confidence > 0) {
+            entry->confidence = confResetToZero ? 0 : entry->confidence - 1;
+        }
+        if (entry->confidence == 0) {
+            entry->stride = stride;
+        }
+    } else {
+        if (entry->confidence < confThreshold) {
+            entry->confidence++;
+        }
+
+    }
+
+    //Current savings calc:
+    uint64_t d = rn_to_ex_delay;
+    entry->saving = saveAlpha * (d - entry->saving);
+
+    DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li, "
+        "last_val %li, pred_val %li, stride=%li, IFsize=%i\n",
+            pred_value != correct_val, entry->confidence, entry->value,
+            last_value, pred_value, entry->stride, inflightPred.size());
+}
+
+
+void
+LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
+            Addr load_address,RegVal correct_val, RegVal predicted_val,
+            LVPType classification, Cycles rn_to_ex_delay, bool critical,
+            LVPEntry* entry)
+{
+    uint64_t d = rn_to_ex_delay;
+
+    //Normal Stats
+    stats.totalLoads++;
     if (classification == LVP_PREDICTABLE) {
-        ls.pred++;
-        la.predict=1;
         if (predicted_val != correct_val) {
-            ls.incorrect++;
             stats.incorrect++;
-            DPRINTF(SP,"Misprediction: pval %llu,cval %llu,"
-                "iaddr %llu, str %llu\n",
-                predicted_val,correct_val, inst_addr, entry->stride);
-            la.delta = -1;
         } else {
-            ls.correct++;
             stats.correct++;
-            uint64_t d = rn_to_ex_delay;
             lvpstats.valuePredSavedCyclesLog2.sample(d > 0 ? floorLog2(d) : 0);
             lvpstats.valuePredSavedCycles.sample(d);
             lvpstats.totalSavedCycles+=d;
-            ls.savings+=d;
-            la.delta = d;
-            if (critical) {
-                ls.crit_savings+=d;
-            }
-
             if (entry->stride == 0) {
                 lvpstats.constantCorrect++;
                 if (entry->value == 0) {
@@ -177,62 +231,44 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
             }
         }
     }
-    DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%llu, pval=%#x, cval=%#x, class=%i) pred=%i, correct=%i, delay=%i\n",
-            __func__, inst_addr, seq_num, predicted_val,
-            correct_val, classification,
-            classification == LVP_PREDICTABLE,
-            predicted_val == correct_val, rn_to_ex_delay);
 
-
-
-    if (entry == nullptr) {
-        entry = lvpTable.findVictim(key);
-        lvpTable.insertEntry(key, entry);
-
-        entry->confidence = 0;
-        entry->saving = 0;
-        entry->tid = tid;
-        entry->stride = 0;
-        entry->value = correct_val;
-        DPRINTF(LVP, "Allocate new entry: %llu\n", entry->value);
-        return;
+    //Per Load Stats
+    auto& ls = loadStats[inst_addr];
+    ls.exec++;
+    if (critical) {
+        ls.critical++;
     }
-
-    lvpTable.accessEntry(entry);
-    uint64_t last_value = entry->value;
-    uint64_t pred_value = entry->value + entry->stride;
-    int64_t stride = useStride ? ((int64_t)correct_val - (int64_t)last_value) : 0;
-
-    // Update the latest value
-    entry->value = correct_val;
     if (classification == LVP_PREDICTABLE) {
-        assert(inflightPred.size() && (inflightPred.back().sn == seq_num));
-        inflightPred.pop_back();
+        ls.pred++;
+        if (predicted_val != correct_val) {
+            ls.incorrect++;
+        } else {
+            ls.correct++;
+            ls.savings+=d;
+            if (critical) {
+                ls.crit_savings+=d;
+            }
+        }
     }
 
-    la.conf=entry->confidence;
-
-    if (last_value != correct_val) {
-        if (entry->confidence > 0) {
-            DPRINTF(LVP, "Test\n");
-            entry->confidence = confResetToZero ? 0 : entry->confidence - 1;
+    //Per Load Execution Stats
+    auto& la = ls.accesses[seq_num];
+    la.predicted = predicted_val;
+    la.correct = correct_val;
+    la.predict=-1;
+    la.delta=0;
+    la.conf= entry==nullptr ? 0 : entry->confidence;
+    la.save= entry==nullptr ? 0 : saveAlpha * (d - entry->saving);
+    if (classification == LVP_PREDICTABLE) {
+        la.predict=1;
+        if (predicted_val != correct_val) {
+            la.delta = -1;
+        } else {
+            la.delta = d;
         }
-        if (entry->confidence == 0) {
-            entry->stride = stride;
-        }
-    } else {
-        if (entry->confidence < confThreshold) {
-            entry->confidence++;
-        }
-
     }
-    entry->saving = rn_to_ex_delay;
-
-    DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li,"
-        "last_val %li, pred_val %li, stride=%li, IFsize=%i\n",
-            pred_value != correct_val, entry->confidence, entry->value,
-            last_value, pred_value, entry->stride, inflightPred.size());
 }
+
 
 void
 LVPStride::squash(InstSeqNum seq_num)
@@ -290,10 +326,10 @@ LVPStride::dump_and_reset(const std::string& filename)
                 "pc,exec,pred,correct,incorrect,"
                 "penalty,savings,critical,crit_savings\n");
         ccprintf(fileStream_acc,
-                "pc,tick,predict,predicted,correct,delta,confidence\n");
+                "pc,seqnum,predict,predicted,correct,delta,confidence,save\n");
     }else{
         ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0\n");
-        ccprintf(fileStream_acc,"-1,0,0,0,0,0\n");
+        ccprintf(fileStream_acc,"-1,0,0,0,0,0,0\n");
     }
 
     // Dump stats for summary
@@ -317,14 +353,15 @@ LVPStride::dump_and_reset(const std::string& filename)
         const auto& stat = li.second;
 
             for (const auto& acc : stat.accesses) {
-            ccprintf(fileStream_acc,"%llu,%llu,%i,%llu,%llu,%i,%llu\n",
+            ccprintf(fileStream_acc,"%llu,%llu,%i,%llu,%llu,%i,%llu,%lf\n",
                 li.first,
                 acc.first,
                 acc.second.predict,
                 acc.second.predicted,
                 acc.second.correct,
                 acc.second.delta,
-                acc.second.conf
+                acc.second.conf,
+                acc.second.save
             );
         }
     }

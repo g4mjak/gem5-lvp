@@ -62,6 +62,7 @@ class LVPStride : public ValuePredictor
                           RegVal correct_val, RegVal predicted_val,
                           LVPType classification, Cycles rn_to_ex_delay,
                           bool critical) override;
+
     void squash(const InstSeqNum seq_num) override;
 
     void addpenalty (Cycles delta,Addr load_addr) override;
@@ -97,11 +98,10 @@ class LVPStride : public ValuePredictor
         /** Confidence of the prediction */
         int confidence;
         /** Savings Value of the prediction */
-        int saving;
+        double saving;
 
         /** Prediction */
         int64_t stride;
-
         uint64_t value;
         uint64_t instance_count;
 
@@ -131,11 +131,18 @@ class LVPStride : public ValuePredictor
 
     unsigned numInflights(Addr iaddr);
 
+    void update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
+                    Addr load_address, RegVal correct_val,
+                    RegVal predicted_val, LVPType classification,
+                    Cycles rn_to_ex_delay,
+                    bool critical, LVPEntry * entry);
+
 
     /** The confidence threshold */
     const int confThreshold;
 
     const int saveThreshold;
+    const double saveAlpha;
 
     /** Reset policy. Reset to zero or decrement */
     const bool confResetToZero;
@@ -149,6 +156,7 @@ class LVPStride : public ValuePredictor
         uint64_t correct;
         int64_t predict;
         int64_t conf;
+        double save;
     };
 
     struct load_info

@@ -1411,6 +1411,13 @@ Commit::updateValuePredictor(ThreadID tid, const DynInstPtr &inst)
     if (!inst->isLoad())
         return;
 
+    if (inst->numDestRegs() != 1)
+        return;
+
+    if (inst->destRegIdx(0).classValue() != RegClassType::IntRegClass)
+        return;
+
+
     // If it was a load, we want to read the actual result of the
     // instruction so we can update the LVPU -Pete
     RegVal reg_result = 0;
