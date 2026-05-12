@@ -53,7 +53,7 @@ LVPStride::LVPStride(const LVPStrideParams &p)
           LVPEntry(genTagExtractor(p.table_indexing_policy))),
       confThreshold(p.confidence_threshold),
       saveThreshold(p.savings_threshold),
-      saveAlpha(0.1),
+      saveAlpha(p.savings_alpha),
       confResetToZero(p.confidence_reset_to_zero),
       useStride(p.use_stride),
       firstDump(true),
@@ -89,21 +89,17 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
     result.taken = LVP_STRONG_UNPREDICTABLE;
 
     if (entry && entry->tid == tid) {
-        // DPRINTF(BTB, "BTB::%s: hit PC: %#x, idx:%#x \n",
-        //              __func__, instPC, idx);
-            // Get the number of inflights
+
+        // Get the number of inflights
         unsigned inflights = numInflights(inst_addr);
-            // The value is this instance + in-flights * the stride
+        // The value is this instance + in-flights * the stride
         result.value = entry->value + ((inflights + 1) * entry->stride);
-        if (entry->confidence >= confThreshold) {
-            // && entry->saving >= saveThreshold
+
+        if (entry->confidence >= confThreshold
+            && entry->saving >= saveThreshold) {
 
             result.predict = true;
-            // result.value = entry->value + (inflights * entry->stride);
             result.taken = LVP_PREDICTABLE;
-
-            // Push the prediction instance to the in-flight queue
-
 
         }
         DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu,"
@@ -113,6 +109,7 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
         lvpTable.accessEntry(entry);
     }
 
+    // Push the prediction instance to the in-flight queue
     inflightPred.push_front({inst_addr, seq_num});
 
     DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%i)"
@@ -192,7 +189,8 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
 
     //Current savings calc:
     uint64_t d = rn_to_ex_delay;
-    entry->saving = saveAlpha * (d - entry->saving);
+    //entry->saving = saveAlpha * d + (1-saveAlpha)*entry->saving;
+    entry->saving += int(d - entry->saving) >> 3;
 
     DPRINTF(LVP, "Entry update: pred=%i, conf=%i, val=%li, "
         "last_val %li, pred_val %li, stride=%li, IFsize=%i\n",
@@ -207,6 +205,7 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
             LVPType classification, Cycles rn_to_ex_delay, bool critical,
             LVPEntry* entry)
 {
+    //Turn of per load and per load executions stats by returning early
     uint64_t d = rn_to_ex_delay;
 
     //Normal Stats
@@ -233,6 +232,7 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
     }
 
     //Per Load Stats
+
     auto& ls = loadStats[inst_addr];
     ls.exec++;
     if (critical) {
@@ -248,21 +248,29 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
             if (critical) {
                 ls.crit_savings+=d;
             }
+            if (entry->stride!=0)
+            {
+                ls.strides++;
+            }
+
         }
     }
+
+    return;
 
     //Per Load Execution Stats
     auto& la = ls.accesses[seq_num];
     la.predicted = predicted_val;
     la.correct = correct_val;
-    la.predict=-1;
-    la.delta=0;
-    la.conf= entry==nullptr ? 0 : entry->confidence;
-    la.save= entry==nullptr ? 0 : saveAlpha * (d - entry->saving);
+    la.predict = -2;
+    la.delta = d;
+    la.save = entry==nullptr ? 0 : entry->saving;
+    la.conf = entry==nullptr ? 0 : entry->confidence;
+
     if (classification == LVP_PREDICTABLE) {
-        la.predict=1;
+        la.predict = -1;
         if (predicted_val != correct_val) {
-            la.delta = -1;
+            la.delta = d;
         } else {
             la.delta = d;
         }
@@ -324,17 +332,17 @@ LVPStride::dump_and_reset(const std::string& filename)
     if (firstDump) {
         ccprintf(fileStream_sum,
                 "pc,exec,pred,correct,incorrect,"
-                "penalty,savings,critical,crit_savings\n");
+                "penalty,savings,critical,crit_savings,strides\n");
         ccprintf(fileStream_acc,
                 "pc,seqnum,predict,predicted,correct,delta,confidence,save\n");
     }else{
-        ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0\n");
+        ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0,0\n");
         ccprintf(fileStream_acc,"-1,0,0,0,0,0,0\n");
     }
 
     // Dump stats for summary
     for (auto& li : loadStats) {
-        ccprintf(fileStream_sum,"%llu,%i,%i,%i,%i,%i,%i,%i,%i\n",
+        ccprintf(fileStream_sum,"%llu,%i,%i,%i,%i,%i,%llu,%i,%i,%i\n",
                  li.first,
                  li.second.exec,
                  li.second.pred,
@@ -343,10 +351,12 @@ LVPStride::dump_and_reset(const std::string& filename)
                  li.second.penalty,
                  li.second.savings,
                  li.second.critical,
-                 li.second.crit_savings
+                 li.second.crit_savings,
+                 li.second.strides
                 );
     }
     fileStream_sum.close();
+
 
     //Dump stats for per access save
     for (auto& li : loadStats) {

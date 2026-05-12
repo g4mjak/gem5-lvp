@@ -142,7 +142,7 @@ class LVPStride : public ValuePredictor
     const int confThreshold;
 
     const int saveThreshold;
-    const double saveAlpha;
+    const float saveAlpha;
 
     /** Reset policy. Reset to zero or decrement */
     const bool confResetToZero;
@@ -166,9 +166,10 @@ class LVPStride : public ValuePredictor
         int correct = 0;
         int incorrect = 0;
         int penalty = 0;
-        int savings = 0;
+        uint64_t savings = 0;
         int critical = 0;
         int crit_savings = 0;
+        int strides = 0;
 
         std::map<uint64_t, LoadAccess> accesses;
         //std::vector<uint64_t> accesses;

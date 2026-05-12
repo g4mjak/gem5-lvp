@@ -96,6 +96,8 @@ class LVPStride(ValuePredictor):
         2, "Confidence threshold for predictions"
     )
     savings_threshold = Param.Unsigned(1, "Savings threshold for prediction")
+    savings_alpha = Param.Float(0.3, "Savings alpha value")
+
     confidence_reset_to_zero = Param.Bool(
         False, "Reset confidence to 0 on misprediction"
     )
