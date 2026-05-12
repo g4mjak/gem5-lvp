@@ -1470,8 +1470,10 @@ IEW::validatePredValue(const DynInstPtr &inst)
                 inst->seqNum, inst->isValSpeculation, inst->fault != NoFault, inst->getInstResult().isValid());
     // Only validate if a prediction was made for this instruction
     // and it the instruction didn't fault
-    if (!inst->isValSpeculation)
+    if (!inst->isValSpeculation) {
+        inst->pred_tick=curTick()-inst->pred_tick;
         return;
+    }
     if (inst->fault != NoFault)
         return;
     if (!inst->getInstResult().isValid())
