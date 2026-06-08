@@ -1438,14 +1438,15 @@ Commit::updateValuePredictor(ThreadID tid, const DynInstPtr &inst)
     DPRINTF(Commit, "Is Load: %d, Valid Result: %d\n", inst->isLoad(), validResult);
     // Update the VP for all instructions
     if (validResult) {
+        Cycles exec_time = cpu->ticksToCycles(inst->endexec-inst->startexec);
         Cycles clk = cpu->ticksToCycles(inst->pred_tick);
         valuePred->update(inst->threadNumber,
                           inst->pcState().instAddr(),
                           inst->seqNum, inst->effAddr,
                           reg_result, inst->getLVPValue(),
                           inst->getLVPClassification(),
-                          clk,
-                          inst->critical
+                          clk, inst->critical,
+                          exec_time, inst->l1Miss
                         );
         // debug statement to see if we are speculating
         DPRINTF(Commit, "Inst [%llu] Speculating: %d, LVP Classification: %d\n", inst->seqNum, inst->isValSpeculation, inst->getLVPClassification());

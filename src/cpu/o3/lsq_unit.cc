@@ -1137,6 +1137,7 @@ LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
         if (inst->fault == NoFault) {
             // Complete access to copy data to proper place.
             inst->completeAcc(pkt);
+            inst->endexec=curTick();
         } else {
             // If the instruction has an outstanding fault, we cannot complete
             // the access as this discards the current fault.

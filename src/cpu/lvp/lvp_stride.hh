@@ -61,7 +61,8 @@ class LVPStride : public ValuePredictor
     void update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_address,
                           RegVal correct_val, RegVal predicted_val,
                           LVPType classification, Cycles rn_to_ex_delay,
-                          bool critical) override;
+                          bool critical, Cycles exec_time,
+                          bool l1Miss) override;
 
     void squash(const InstSeqNum seq_num) override;
 
@@ -110,6 +111,8 @@ class LVPStride : public ValuePredictor
     AssociativeCache<LVPEntry> lvpTable;
     // std::unordered_map<Addr, LVPEntry> lvpMap;
 
+
+
     struct InflightInfo
     {
         Addr iaddr;
@@ -135,7 +138,8 @@ class LVPStride : public ValuePredictor
                     Addr load_address, RegVal correct_val,
                     RegVal predicted_val, LVPType classification,
                     Cycles rn_to_ex_delay,
-                    bool critical, LVPEntry * entry);
+                    bool critical, Cycles exec_time, LVPEntry * entry,
+                    bool l1Miss);
 
 
     /** The confidence threshold */
@@ -156,6 +160,7 @@ class LVPStride : public ValuePredictor
         uint64_t correct;
         int64_t predict;
         int64_t conf;
+        uint64_t exetime;
         double save;
     };
 
@@ -170,6 +175,8 @@ class LVPStride : public ValuePredictor
         int critical = 0;
         int crit_savings = 0;
         int strides = 0;
+        int l1miss = 0;
+        uint64_t exetime = 0;
 
         std::map<uint64_t, LoadAccess> accesses;
         //std::vector<uint64_t> accesses;
@@ -178,6 +185,9 @@ class LVPStride : public ValuePredictor
     bool firstDump;
 
     std::unordered_map<Addr,load_info> loadStats;
+
+
+    std::unordered_map<int64_t,uint64_t> valueStats;
 
 
     struct LVPStrideStats : public statistics::Group
@@ -192,11 +202,15 @@ class LVPStride : public ValuePredictor
         statistics::Distribution valuePredSavedCyclesLog2;
         statistics::Distribution valuePredSavedCycles;
 
+        statistics::Distribution execCyclesLog2;
+        statistics::Distribution execCycles;
+
         statistics::Distribution penaltyCyclesLog2;
         statistics::Distribution penaltyCycles;
 
-        statistics::Scalar totalPenaltyCycles;
         statistics::Scalar totalSavedCycles;
+        statistics::Scalar totalExecCycles;
+        statistics::Scalar totalPenaltyCycles;
     } lvpstats;
 };
 

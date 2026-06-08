@@ -47,6 +47,8 @@
 
 #include "base/compiler.hh"
 #include "base/logging.hh"
+#include "cpu/o3/dyn_inst.hh"
+#include "cpu/o3/lsq.hh"
 #include "debug/Cache.hh"
 #include "debug/CacheComp.hh"
 #include "debug/CachePort.hh"
@@ -508,6 +510,16 @@ BaseCache::recvTimingReq(PacketPtr pkt)
 
         handleTimingReqHit(pkt, blk, request_time);
     } else {
+
+        o3::LSQRequest *request =
+        dynamic_cast<o3::LSQRequest*>(pkt->senderState);
+        if (request) {
+            o3::DynInstPtr inst = request->instruction();
+            if (inst){
+                inst->l1Miss=true;
+            }
+        }
+
         handleTimingReqMiss(pkt, blk, forward_time, request_time);
 
         ppMiss->notify(CacheAccessProbeArg(pkt,accessor));

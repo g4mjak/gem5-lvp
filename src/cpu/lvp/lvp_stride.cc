@@ -102,7 +102,7 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
             result.taken = LVP_PREDICTABLE;
 
         }
-        DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu,"
+        DPRINTF(LVP, "VP for iaddr=%#x, lastval=%llu, "
                 "stride=%i, inflights=%i, conf=%i\n",
                     inst_addr, entry->value,
                     entry->stride, inflights, entry->confidence);
@@ -123,7 +123,8 @@ LVPStride::lookup(ThreadID tid, Addr inst_addr, InstSeqNum seq_num)
 void
 LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_address,
                   RegVal correct_val, RegVal predicted_val,
-                  LVPType classification, Cycles rn_to_ex_delay, bool critical)
+                  LVPType classification, Cycles rn_to_ex_delay,
+                  bool critical, Cycles exec_time, bool l1Miss)
 {
 
     LVPEntry::KeyType key = index(tid, inst_addr);
@@ -131,7 +132,7 @@ LVPStride::update(ThreadID tid, Addr inst_addr, InstSeqNum seq_num, Addr load_ad
 
     update_stats(tid,inst_addr,seq_num,load_address,
         correct_val,predicted_val,classification,
-        rn_to_ex_delay,critical,entry);
+        rn_to_ex_delay,critical,exec_time,entry,l1Miss);
 
     DPRINTF(LVP, "LVP::%s(iaddr=%#x, sn=%llu, pval=%#x, cval=%#x, class=%i) "
         "pred=%i, correct=%i, delay=%i\n",
@@ -203,30 +204,40 @@ void
 LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
             Addr load_address,RegVal correct_val, RegVal predicted_val,
             LVPType classification, Cycles rn_to_ex_delay, bool critical,
-            LVPEntry* entry)
+            Cycles exec_time, LVPEntry* entry, bool l1Miss)
 {
     //Turn of per load and per load executions stats by returning early
+
+
     uint64_t d = rn_to_ex_delay;
+    uint64_t e = exec_time;
 
     //Normal Stats
     stats.totalLoads++;
     if (classification == LVP_PREDICTABLE) {
         if (predicted_val != correct_val) {
             stats.incorrect++;
-        } else {
+        } else  {
             stats.correct++;
             lvpstats.valuePredSavedCyclesLog2.sample(d > 0 ? floorLog2(d) : 0);
             lvpstats.valuePredSavedCycles.sample(d);
             lvpstats.totalSavedCycles+=d;
-            if (entry->stride == 0) {
-                lvpstats.constantCorrect++;
-                if (entry->value == 0) {
-                    lvpstats.numZeroConstLoads++;
-                } else if (entry->value == 1) {
-                    lvpstats.numOneConstLoads++;
+
+            lvpstats.execCyclesLog2.sample(e > 0 ? floorLog2(e) : 0);
+            lvpstats.execCycles.sample(e);
+            lvpstats.totalExecCycles+=e;
+            return;
+            if (entry != nullptr) {
+                if (entry->stride == 0) {
+                    lvpstats.constantCorrect++;
+                    if (entry->value == 0) {
+                        lvpstats.numZeroConstLoads++;
+                    } else if (entry->value == 1) {
+                        lvpstats.numOneConstLoads++;
+                    }
+                } else {
+                    lvpstats.strideCorrect++;
                 }
-            } else {
-                lvpstats.strideCorrect++;
             }
         }
     }
@@ -235,6 +246,9 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
 
     auto& ls = loadStats[inst_addr];
     ls.exec++;
+    if (l1Miss){
+        ls.l1miss++;
+    }
     if (critical) {
         ls.critical++;
     }
@@ -245,16 +259,27 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
         } else {
             ls.correct++;
             ls.savings+=d;
+            ls.exetime+=e;
             if (critical) {
                 ls.crit_savings+=d;
             }
+            if (entry != nullptr){
             if (entry->stride!=0)
-            {
-                ls.strides++;
+                {
+                    ls.strides++;
+                }
             }
-
         }
     }
+
+
+
+    //Value Stats
+    if (entry != nullptr){
+        auto& lv = valueStats[correct_val];
+        lv=lv + 1;
+    }
+
 
     return;
 
@@ -264,6 +289,7 @@ LVPStride::update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
     la.correct = correct_val;
     la.predict = -2;
     la.delta = d;
+    la.exetime=e;
     la.save = entry==nullptr ? 0 : entry->saving;
     la.conf = entry==nullptr ? 0 : entry->confidence;
 
@@ -323,26 +349,35 @@ LVPStride::dump_and_reset(const std::string& filename)
         simout.resolve(filename+"_summary.csv"), mode);
     std::ofstream fileStream_acc(
         simout.resolve(filename+"_accesses.csv"), mode);
-
+    std::ofstream fileStream_val(
+        simout.resolve(filename+"_values.csv"), mode);
 
     if (!fileStream_sum.good())
         panic("Could not open %s for writing\n", filename+"_summary.csv");
     if (!fileStream_acc.good())
         panic("Could not open %s for writing\n", filename+"_accesses.csv");
+    if (!fileStream_val.good())
+        panic("Could not open %s for writing\n", filename+"_values.csv");
+
     if (firstDump) {
         ccprintf(fileStream_sum,
                 "pc,exec,pred,correct,incorrect,"
-                "penalty,savings,critical,crit_savings,strides\n");
+                "penalty,savings,critical,crit_savings"
+                ",strides,l1miss,exetime\n");
         ccprintf(fileStream_acc,
-                "pc,seqnum,predict,predicted,correct,delta,confidence,save\n");
+                "pc,seqnum,predict,predicted,correct"
+                ",delta,confidence,save,exetime\n");
+        ccprintf(fileStream_val,
+                "value,count\n");
     }else{
-        ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0,0\n");
-        ccprintf(fileStream_acc,"-1,0,0,0,0,0,0\n");
+        ccprintf(fileStream_sum,"-1,0,0,0,0,0,0,0,0,0,0,0\n");
+        ccprintf(fileStream_acc,"-1,0,0,0,0,0,0,0,0\n");
+        ccprintf(fileStream_val,"0,-1\n");
     }
 
     // Dump stats for summary
     for (auto& li : loadStats) {
-        ccprintf(fileStream_sum,"%llu,%i,%i,%i,%i,%i,%llu,%i,%i,%i\n",
+        ccprintf(fileStream_sum,"%llu,%i,%i,%i,%i,%i,%llu,%i,%i,%i,%i,%llu\n",
                  li.first,
                  li.second.exec,
                  li.second.pred,
@@ -352,7 +387,9 @@ LVPStride::dump_and_reset(const std::string& filename)
                  li.second.savings,
                  li.second.critical,
                  li.second.crit_savings,
-                 li.second.strides
+                 li.second.strides,
+                 li.second.l1miss,
+                 li.second.exetime
                 );
     }
     fileStream_sum.close();
@@ -363,7 +400,8 @@ LVPStride::dump_and_reset(const std::string& filename)
         const auto& stat = li.second;
 
             for (const auto& acc : stat.accesses) {
-            ccprintf(fileStream_acc,"%llu,%llu,%i,%llu,%llu,%i,%llu,%lf\n",
+            ccprintf(fileStream_acc,"%llu,%llu,%i,"
+                "%llu,%llu,%i,%llu,%lf,%llu\n",
                 li.first,
                 acc.first,
                 acc.second.predict,
@@ -371,13 +409,24 @@ LVPStride::dump_and_reset(const std::string& filename)
                 acc.second.correct,
                 acc.second.delta,
                 acc.second.conf,
-                acc.second.save
+                acc.second.save,
+                acc.second.exetime
             );
         }
     }
     fileStream_acc.close();
-
     loadStats.clear();
+
+
+    for (auto& li: valueStats){
+        ccprintf(fileStream_val,"%d,%llu\n",
+            li.first,
+            li.second
+        );
+    }
+    loadStats.clear();
+    valueStats.clear();
+
     firstDump = false;
 }
 
@@ -474,17 +523,25 @@ LVPStride::LVPStrideStats::LVPStrideStats(statistics::Group *parent)
                "Required for Top-Down, number of committed instructions"),
       ADD_STAT(valuePredSavedCycles, statistics::units::Count::get(),
                "Required for Top-Down, number of committed instructions"),
+      ADD_STAT(execCyclesLog2, statistics::units::Count::get(),
+               "Required for Top-Down, execution times"),
+      ADD_STAT(execCycles, statistics::units::Count::get(),
+               "Required for Top-Down, execution times"),
       ADD_STAT(penaltyCyclesLog2, statistics::units::Count::get(),
                "Required for Top-Down, penalty"),
       ADD_STAT(penaltyCycles, statistics::units::Count::get(),
                "Required for Top-Down, penalty"),
-      ADD_STAT(totalPenaltyCycles, statistics::units::Count::get(),
-               "Required for Top-Down, total penalty"),
       ADD_STAT(totalSavedCycles, statistics::units::Count::get(),
-               "Required for Top-Down, total savings")
+               "Required for Top-Down, total savings"),
+      ADD_STAT(totalExecCycles, statistics::units::Count::get(),
+               "Required for Top-Down, total execution time"),
+      ADD_STAT(totalPenaltyCycles, statistics::units::Count::get(),
+               "Required for Top-Down, total penalty")
 {
     valuePredSavedCyclesLog2.init(0, 15, 1).flags(statistics::pdf);
     valuePredSavedCycles.init(0, 40, 2).flags(statistics::pdf);
+    execCyclesLog2.init(0, 15, 1).flags(statistics::pdf);
+    execCycles.init(0, 40, 2).flags(statistics::pdf);
     penaltyCyclesLog2.init(0, 15, 1).flags(statistics::pdf);
     penaltyCycles.init(0, 40, 2).flags(statistics::pdf);
 }

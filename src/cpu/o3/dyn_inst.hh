@@ -399,6 +399,9 @@ class DynInst : public ExecContext, public RefCounted
     bool corrected = false;
     bool critical= false;
     Tick pred_tick = 0;
+    Tick startexec = 0;
+    Tick endexec= 0;
+    bool l1Miss = false;
 
     // setter for LVP info -Pete
     void setLVPInfo(LVPType classification, RegVal value, Tick ptick=0)

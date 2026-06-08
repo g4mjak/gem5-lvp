@@ -1012,9 +1012,10 @@ InstructionQueue::scheduleReadyInsts()
             issuing_inst->setIssued();
             ++total_issued;
 
-#if TRACING_ON
+//#if TRACING_ON
             issuing_inst->issueTick = curTick() - issuing_inst->fetchTick;
-#endif
+            issuing_inst->startexec = curTick();
+//#endif
 
             if (issuing_inst->firstIssue == -1)
                 issuing_inst->firstIssue = curTick();
