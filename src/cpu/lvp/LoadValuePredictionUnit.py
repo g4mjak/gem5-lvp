@@ -72,13 +72,15 @@ class LVPStride(ValuePredictor):
     cxx_header = "cpu/lvp/lvp_stride.hh"
     cxx_exports = [
         PyBindMethod("dump_and_reset"),
+        PyBindMethod("set_list"),
     ]
+
     tagBits = Param.Unsigned(16, "Tag bits of the load value predictor table")
 
-    # table_entries = Param.Unsigned(8192, "Number of entries in the load value predictor table")
     table_entries = Param.MemorySize(
         "8192", "Number of entries in the load value predictor table"
     )
+
     table_assoc = Param.Unsigned(8, "Associativity of the predictor table")
     table_indexing_policy = Param.TaggedIndexingPolicy(
         TaggedSetAssociative(
@@ -92,6 +94,22 @@ class LVPStride(ValuePredictor):
         LRURP(), "Replacement policy of the PC table"
     )
 
+    pre_table_entries = Param.MemorySize(
+        "8192", "Number of entries in the pre prediction table"
+    )
+    pre_table_indexing_policy = Param.TaggedIndexingPolicy(
+        TaggedSetAssociative(
+            entry_size=1,
+            assoc=Parent.table_assoc,
+            size=Parent.pre_table_entries,
+        ),
+        "Indexing policy of the load value prediction table",
+    )
+    pre_table_replacement_policy = Param.BaseReplacementPolicy(
+        LRURP(), "Replacement policy of the PC table"
+    )
+
+    entry_threshold = Param.Unsigned(0, "Entry Threshold for Filter")
     confidence_threshold = Param.Unsigned(
         2, "Confidence threshold for predictions"
     )
@@ -101,4 +119,7 @@ class LVPStride(ValuePredictor):
     confidence_reset_to_zero = Param.Bool(
         False, "Reset confidence to 0 on misprediction"
     )
-    use_stride = Param.Bool(True, "Reset confidence to 0 on misprediction")
+    use_stride = Param.Bool(True, "Use Stride Prediction")
+    use_pre_predictor = Param.Bool(False, "Use PrePredictor")
+    use_preset_list = Param.Bool(False, "Use Preset List")
+    path_preset_list = Param.String("", "Path for Preset List")

@@ -70,6 +70,8 @@ class LVPStride : public ValuePredictor
 
     void dump_and_reset(const std::string& filename);
 
+    void set_list(const std::string& filename);
+
   private:
 
     /** Load value predictor table entry */
@@ -77,7 +79,7 @@ class LVPStride : public ValuePredictor
     {
         LVPEntry(TagExtractor ext)
           : TaggedEntry(), tag(0), tid(0), valid(false),
-            confidence(0)
+            confidence(0), used(false)
         {
             registerTagExtractor(ext);
         }
@@ -106,11 +108,36 @@ class LVPStride : public ValuePredictor
         uint64_t value;
         uint64_t instance_count;
 
+        /** Stats */
+        bool used;
     };
     /** Access map table */
     AssociativeCache<LVPEntry> lvpTable;
     // std::unordered_map<Addr, LVPEntry> lvpMap;
 
+    struct PrPrEntry : public TaggedEntry
+    {
+        PrPrEntry (TagExtractor ext)
+          : TaggedEntry(), tag(0), tid(0)
+        {
+            registerTagExtractor(ext);
+        }
+
+        /** The entry's tag. */
+        Addr tag;
+
+        /** The entry's thread id. */
+        ThreadID tid;
+
+        /** Criteria for LVPTable entry */
+        int confidence;
+        int crit;
+
+        uint64_t stride;
+        int64_t value;
+    };
+
+    AssociativeCache<PrPrEntry> prprTable;
 
 
     struct InflightInfo
@@ -134,6 +161,7 @@ class LVPStride : public ValuePredictor
 
     unsigned numInflights(Addr iaddr);
 
+
     void update_stats(ThreadID tid, Addr inst_addr, InstSeqNum seq_num,
                     Addr load_address, RegVal correct_val,
                     RegVal predicted_val, LVPType classification,
@@ -148,10 +176,20 @@ class LVPStride : public ValuePredictor
     const int saveThreshold;
     const float saveAlpha;
 
+    const int entryThreshold;
+
     /** Reset policy. Reset to zero or decrement */
     const bool confResetToZero;
 
     const bool useStride;
+
+    const bool usePrePredictor;
+    const bool usePresetList;
+
+    std::unordered_set<Addr> presetList;
+    std::string pathPresetList;
+
+    const int pc = 4207284;
 
     struct LoadAccess
     {
@@ -186,8 +224,18 @@ class LVPStride : public ValuePredictor
 
     std::unordered_map<Addr,load_info> loadStats;
 
-
     std::unordered_map<int64_t,uint64_t> valueStats;
+
+    struct  table_info
+    {
+        int free = 0;
+        int fresh = 0;
+        int training = 0;
+        int predicting = 0;
+    };
+
+    int t_count = 0;
+    std::unordered_map<uint64_t,table_info> tableStats;
 
 
     struct LVPStrideStats : public statistics::Group
@@ -211,6 +259,7 @@ class LVPStride : public ValuePredictor
         statistics::Scalar totalSavedCycles;
         statistics::Scalar totalExecCycles;
         statistics::Scalar totalPenaltyCycles;
+        statistics::Scalar list_count;
     } lvpstats;
 };
 
