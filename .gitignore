@@ -40,3 +40,5 @@ typings
 .DS_Store
 /ubench
 /gem5-svr-bench
+.vscode/settings.json
+.vscode/settings.json

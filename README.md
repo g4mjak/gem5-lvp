@@ -1,3 +1,11 @@
+# 2-level Value Predictor in gem5
+The value predictor and the main additions can be found in the [lvp](./src/cpu/lvp/) folder.
+Additional changes were made mainly to the commit and rename file of the O3CPU.
+
+The value predictor is a 2-level predictor that uses a filter. Implemented is also a preset list that can be activated and filled from previous simulations to simulate an optimal predictor. Additional stats were also added that record data on what values and loads were predicted and on the table behavior and save these to .csv files. These might need to be turned off for larger simulations as they create large amounts of data.
+
+The rest of the file is kept from the original.
+
 # The gem5 Simulator
 
 This is the repository for the gem5 simulator. It contains the full source code
